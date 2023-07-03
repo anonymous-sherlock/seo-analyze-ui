@@ -1,0 +1,5 @@
+{
+    "require": {
+        "donatello-za/rake-php-plus": "^1.0"
+    }
+}
