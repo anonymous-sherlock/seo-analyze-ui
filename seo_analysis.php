@@ -37,15 +37,13 @@ function checkURLRedirects($url)
   $headers = get_headers($url, 1);
 
   if (isset($headers['Location'])) {
-    if (is_array($headers['Location'])) {
-      return $headers['Location'][count($headers['Location']) - 1];
-    } else {
-      return $headers['Location'];
-    }
+    return is_array($headers['Location'])
+      ? end($headers['Location'])
+      : $headers['Location'];
   }
-
   return null;
 }
+
 // Function to check if robots.txt exists
 function checkRobotsTxt($url)
 {
@@ -116,15 +114,18 @@ $title = $titleNode ? $titleNode->textContent : '';
 // favicon
 $faviconNode = $xpath->query('//link[@rel="icon" or @rel="shortcut icon"]/@href')->item(0);
 $favicon = $faviconNode ? $faviconNode->textContent : '';
-// heading
-$headings = ['h1' => '', 'h2' => '', 'h3' => '', 'h4' => ''];
+// Headings
+$headings = ['h1' => [], 'h2' => [], 'h3' => [], 'h4' => [], 'h5' => [], 'h6' => []];
+
 foreach ($headings as $heading => &$value) {
-  $headingNode = $xpath->query("//{$heading}")->item(0);
-  $value = $headingNode ? preg_replace('/\s+/', ' ', trim($headingNode->textContent)) : '';
+  $headingNodes = $xpath->query("//{$heading}");
+
+  foreach ($headingNodes as $headingNode) {
+    $text = $headingNode ? preg_replace('/\s+/', ' ', trim($headingNode->textContent)) : '';
+
+    $value[] = $text;
+  }
 }
-
-
-
 // meta description
 $descriptionNode = $xpath->query('//meta[@name="description"]/@content')->item(0);
 $description = $descriptionNode ? $descriptionNode->textContent : '';
@@ -175,43 +176,43 @@ $internalLinks = [];
 $internalLinkUrls = [];
 $internalLinkNodes = $xpath->query('//a[not(starts-with(@href, "#"))]');
 foreach ($internalLinkNodes as $linkNode) {
-    $href = $linkNode->getAttribute('href');
-    $text = trim(preg_replace('/\s+/', ' ', $linkNode->textContent));
+  $href = $linkNode->getAttribute('href');
+  $text = trim(preg_replace('/\s+/', ' ', $linkNode->textContent));
 
-    if (!empty($href) && !empty($text)) {
-        // Check if $href is an absolute URL and belongs to the same domain
-        if (filter_var($href, FILTER_VALIDATE_URL)) {
-            $parsedHref = parse_url($href);
+  if (!empty($href) && !empty($text)) {
+    // Check if $href is an absolute URL and belongs to the same domain
+    if (filter_var($href, FILTER_VALIDATE_URL)) {
+      $parsedHref = parse_url($href);
 
-            if (isset($parsedHref['host']) && $parsedHref['host'] === parse_url($url, PHP_URL_HOST)) {
-                $fullUrl = $href;
-            } else {
-                continue; // Skip external URLs
-            }
-        } else {
-            $base = rtrim($url, '/');
-            $separator = '/';
-            if (substr($href, 0, 1) === '/') {
-                $separator = '';
-            }
-            $fullUrl = $base . $separator . $href;
-        }
-
-        $lowercaseUrl = strtolower($fullUrl);
-
-        // Check if the lowercase URL has already been added to the array
-        $isInternalLink = isset($internalLinkUrls[$lowercaseUrl]);
-
-        if (!$isInternalLink) {
-            $internalLinks[] = [
-                'url' => $fullUrl,
-                'text' => $text
-            ];
-
-            // Add the lowercase URL to the list of added URLs
-            $internalLinkUrls[$lowercaseUrl] = true;
-        }
+      if (isset($parsedHref['host']) && $parsedHref['host'] === parse_url($url, PHP_URL_HOST)) {
+        $fullUrl = $href;
+      } else {
+        continue; // Skip external URLs
+      }
+    } else {
+      $base = rtrim($url, '/');
+      $separator = '/';
+      if (substr($href, 0, 1) === '/') {
+        $separator = '';
+      }
+      $fullUrl = $base . $separator . $href;
     }
+
+    $lowercaseUrl = strtolower($fullUrl);
+
+    // Check if the lowercase URL has already been added to the array
+    $isInternalLink = isset($internalLinkUrls[$lowercaseUrl]);
+
+    if (!$isInternalLink) {
+      $internalLinks[] = [
+        'url' => $fullUrl,
+        'text' => $text
+      ];
+
+      // Add the lowercase URL to the list of added URLs
+      $internalLinkUrls[$lowercaseUrl] = true;
+    }
+  }
 }
 
 // Extract external links with link text
@@ -317,16 +318,11 @@ function getCanonicalUrl($html)
 }
 // Check if the canonical URL exists
 $hasCanonicalUrl = getCanonicalUrl($html);
-// new code add here
-
-
-
-// Function to check if a sitemap exists
 // Function to check if a sitemap exists and follow redirects
 function checkSitemap($url)
 {
   $sitemapUrl = rtrim($url, '/') . '/sitemap.xml';
-  
+
   $options = array(
     'http' => array(
       'method' => 'HEAD',
@@ -335,7 +331,7 @@ function checkSitemap($url)
   );
   $context = stream_context_create($options);
   $headers = get_headers($sitemapUrl, 1, $context);
-  
+
   if (isset($headers['Location'])) {
     if (is_array($headers['Location'])) {
       return $headers['Location'][count($headers['Location']) - 1]; // Return the final URL after following redirects
@@ -343,16 +339,17 @@ function checkSitemap($url)
       return $headers['Location'];
     }
   }
-  
+
   if ($headers && strpos($headers[0], '200') !== false) {
     return $sitemapUrl; // Sitemap exists and returns a 200 status code
   }
-  
+
   return false; // Sitemap does not exist or returns a non-200 status code
 }
-
 // Check if the sitemap exists
 $sitemapUrl = checkSitemap($url);
+// new code add here
+
 
 
 
@@ -375,6 +372,7 @@ $report = [
   'hasRobotsTxt' => $hasRobotsTxt,
   'hasViewport' => $viewportContent,
   'hasCanonicalUrl' => $hasCanonicalUrl,
+  'mostCommonKeywords' => $mostCommonKeywords,
   'redirects' => $redirects,
   'pageSize' => $pageSize,
   'domSize' => $domSize,
