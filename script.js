@@ -97,6 +97,7 @@ function formatBytes(bytes) {
 // render headings
 async function renderHeadings({ headings: data }) {
   const headingContainer = document.getElementById("heading-container");
+  headingContainer.innerHTML = "";
   for (const heading in data) {
     const headingData = data[heading];
     // Skip appending if data is empty or null
@@ -172,11 +173,11 @@ async function fillData(data) {
 
   renderHeadings(data);
   renderSitemap(data);
+  renderSPFRecord(data);
   const inPageLinks = {
     "Internal Links": data.internalLinks,
     "External Links": data.externalLinks,
   };
-  console.log(inPageLinks);
   renderInPageLink(inPageLinks);
 
   totalImageCount.innerHTML = data?.totalImageCount;
@@ -262,12 +263,12 @@ async function renderSitemap(data) {
   </li>`;
 
   if (sitemapURL) {
+    console.log(sitemap);
     sitemap.innerHTML = sitemapHTML;
   } else {
     checkSitemap.innerHTML = "No Sitemap Found.";
   }
 }
-
 // render in page links
 function renderInPageLink(data) {
   const linkContainer = document.getElementById("link-container");

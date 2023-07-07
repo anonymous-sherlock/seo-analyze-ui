@@ -14,8 +14,7 @@ if (!filter_var($url, FILTER_VALIDATE_URL)) {
 
 // Extract the domain from the provided URL
 $urlParts = parse_url($url);
-$domain = $urlParts['host'];
-
+$domain = extractDomainFromURL($url);
 
 // Function to fetch the HTML content of a URL
 function fetchHTML($url)
@@ -161,8 +160,27 @@ $domSize = countNodes($dom->documentElement);
 // Checking for Doctype 
 $hasDoctype = strpos($html, '<!DOCTYPE html>') !== false;
 // Extract the server signature from the response headers
-$headers = get_headers($url, 1);
-$serverSignature = isset($headers['Server']) ? $headers['Server'] : null;
+function getServerSignature($url)
+{
+  $ch = curl_init($url);
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+  curl_setopt($ch, CURLOPT_HEADER, true);
+  $response = curl_exec($ch);
+
+  $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+  $headers = substr($response, 0, $headerSize);
+
+  $serverSignature = null;
+  foreach (explode("\r\n", $headers) as $header) {
+    if (stripos($header, 'Server:') !== false) {
+      $serverSignature = trim(substr($header, strlen('Server:')));
+      break;
+    }
+  }
+  curl_close($ch);
+  return $serverSignature;
+}
+$serverSignature = getServerSignature($url);
 // Initialize totalImageCount
 $totalImageCount = 0;
 // Extract images without alt attribute text and total images used on the website
@@ -184,52 +202,56 @@ $internalLinks = [];
 $internalLinkUrls = [];
 $internalLinkNodes = $xpath->query('//a[not(starts-with(@href, "#"))]');
 foreach ($internalLinkNodes as $linkNode) {
-    $href = $linkNode->getAttribute('href');
-    $text = trim(preg_replace('/\s+/', ' ', $linkNode->textContent));
+  $href = $linkNode->getAttribute('href');
+  $text = trim(preg_replace('/\s+/', ' ', $linkNode->textContent));
 
-    if (!empty($href) && !empty($text)) {
-        // Check if $href is an absolute URL and belongs to the same domain
-        if (filter_var($href, FILTER_VALIDATE_URL)) {
-            $parsedHref = parse_url($href);
-            print_r($parsedHref);
-            // Check if the parsed URL matches any of the domain variations
-            $parsedUrlHost = isset($parsedHref['host']) ? $parsedHref['host'] : '';
-            $originalUrlHost = parse_url($url, PHP_URL_HOST);
-            $wwwOriginalUrlHost = 'www.' . $originalUrlHost;
+  if (!empty($href) && !empty($text)) {
+    // Check if $href is an absolute URL and belongs to the same domain
+    if (filter_var($href, FILTER_VALIDATE_URL)) {
+      $parsedHref = parse_url($href);
 
-            if ($parsedUrlHost === $originalUrlHost || $parsedUrlHost === $wwwOriginalUrlHost || $wwwOriginalUrlHost === $parsedUrlHost) {
-                $fullUrl = $href;
-            } else {
-                continue; // Skip external URLs
-            }
-        } else {
-            $base = rtrim($url, '/');
-            $separator = '/';
-            if (substr($href, 0, 1) === '/') {
-                $separator = '';
-            }
-            $fullUrl = $base . $separator . $href;
-        }
+      // Check if the parsed URL matches any of the domain variations
+      $parsedUrlHost = isset($parsedHref['host']) ? $parsedHref['host'] : '';
+      $originalUrlHost = parse_url($url, PHP_URL_HOST);
+      $wwwOriginalUrlHost = 'www.' . $originalUrlHost;
+      $withoutWwwOriginalUrlHost = preg_replace('/^www\./', '', $originalUrlHost);
 
-        $lowercaseUrl = strtolower($fullUrl);
-
-        // Check if the lowercase URL has already been added to the array
-        $isInternalLink = isset($internalLinkUrls[$lowercaseUrl]);
-
-        if (!$isInternalLink) {
-            $internalLinks[] = [
-                'url' => $fullUrl,
-                'text' => $text
-            ];
-
-            // Add the lowercase URL to the list of added URLs
-            $internalLinkUrls[$lowercaseUrl] = true;
-        }
+      if (
+        $parsedUrlHost === $originalUrlHost ||
+        $parsedUrlHost === $wwwOriginalUrlHost ||
+        $parsedUrlHost === $withoutWwwOriginalUrlHost ||
+        $wwwOriginalUrlHost === $parsedUrlHost ||
+        $withoutWwwOriginalUrlHost === $parsedUrlHost
+      ) {
+        $fullUrl = $href;
+      } else {
+        continue; // Skip external URLs
+      }
+    } else {
+      $base = rtrim($url, '/');
+      $separator = '/';
+      if (substr($href, 0, 1) === '/') {
+        $separator = '';
+      }
+      $fullUrl = $base . $separator . $href;
     }
+
+    $lowercaseUrl = strtolower($fullUrl);
+
+    // Check if the lowercase URL has already been added to the array
+    $isInternalLink = isset($internalLinkUrls[$lowercaseUrl]);
+
+    if (!$isInternalLink) {
+      $internalLinks[] = [
+        'url' => $fullUrl,
+        'text' => $text
+      ];
+
+      // Add the lowercase URL to the list of added URLs
+      $internalLinkUrls[$lowercaseUrl] = true;
+    }
+  }
 }
-
-
-
 // Extract external links with link text
 $externalLinks = [];
 $externalLinkNodes = $xpath->query('//a[not(starts-with(@href, "/")) and not(starts-with(@href, "#"))]');
@@ -334,35 +356,59 @@ function getCanonicalUrl($html)
 // Check if the canonical URL exists
 $hasCanonicalUrl = getCanonicalUrl($html);
 // Function to check if a sitemap exists and follow redirects
-function checkSitemap($url)
+function getSitemapUrl($url)
 {
-  $sitemapUrl = rtrim($url, '/') . '/sitemap.xml';
+  $sitemapUrls = [];
 
-  $options = array(
-    'http' => array(
-      'method' => 'HEAD',
-      'follow_location' => true // Follow redirects
-    )
-  );
-  $context = stream_context_create($options);
-  $headers = get_headers($sitemapUrl, 1, $context);
+  // Remove 'www' from the URL if present
+  $domain = preg_replace('/^www\./i', '', parse_url($url, PHP_URL_HOST));
 
-  if (isset($headers['Location'])) {
-    if (is_array($headers['Location'])) {
-      return $headers['Location'][count($headers['Location']) - 1]; // Return the final URL after following redirects
-    } else {
-      return $headers['Location'];
+  // Generate possible sitemap URLs
+  $possibleSitemapUrls = [
+    "https://{$domain}/sitemap.xml",
+    "https://{$domain}/sitemap.txt",
+    "https://{$domain}/sitemap",
+    "https://{$domain}/sitemap_index.xml",
+    "https://{$domain}/sitemap_index.txt",
+    "https://{$domain}/sitemap_index",
+    "https://{$domain}/sitemap_index.html",
+    "https://{$domain}/sitemap.xml.gz",
+    "https://{$domain}/sitemap.xml.zip",
+    "https://{$domain}/sitemap.xml.tar",
+    "https://{$domain}/sitemap.xml.rar",
+    "https://{$domain}/sitemap.rss",
+    "https://{$domain}/sitemap.res",
+    "https://{$domain}/sitemap1.xml",
+    // Add more variations as needed
+  ];
+
+  // Check the existence of each possible sitemap URL
+  foreach ($possibleSitemapUrls as $possibleUrl) {
+    $headers = get_headers($possibleUrl);
+    if ($headers && strpos($headers[0], '200') !== false) {
+      $sitemapUrls[] = $possibleUrl;
     }
   }
 
-  if ($headers && strpos($headers[0], '200') !== false) {
-    return $sitemapUrl; // Sitemap exists and returns a 200 status code
+  // Check the robots.txt file for sitemap location
+  $robotsUrl = "https://{$domain}/robots.txt";
+  $robotsContent = @file_get_contents($robotsUrl);
+  if ($robotsContent) {
+    $matches = [];
+    if (preg_match_all('/sitemap:\s*(.*)/i', $robotsContent, $matches)) {
+      $robotsSitemapUrls = $matches[1];
+      foreach ($robotsSitemapUrls as $sitemapUrl) {
+        $sitemapUrl = trim($sitemapUrl);
+        if (!in_array($sitemapUrl, $sitemapUrls)) {
+          $sitemapUrls[] = $sitemapUrl;
+        }
+      }
+    }
   }
-
-  return false; // Sitemap does not exist or returns a non-200 status code
+  return $sitemapUrls;
 }
 // Check if the sitemap exists
-$sitemapUrl = checkSitemap($url);
+$sitemapUrl = getSitemapUrl($url);
 function extractTrackingID($html)
 {
   $matches = [];
@@ -445,10 +491,97 @@ function is404Page($url)
 $nonExistentPageUrl = rtrim($url, '/') . '/non-existent-page';
 // Check if the non-existent page returns a 404 status code
 $hasCustom404Page = is404Page($nonExistentPageUrl);
+function extractDomainFromURL($url)
+{
+  $parsedURL = parse_url($url);
+  $host = $parsedURL['host'];
+
+  // Remove www. prefix if present
+  $host = preg_replace('/^www\./', '', $host);
+
+  return $host;
+}
+function getSPFRecord($domain)
+{
+  $spfRecords = dns_get_record($domain, DNS_TXT);
+  $spfRecord = '';
+
+  foreach ($spfRecords as $record) {
+    if (strpos($record['txt'], 'v=spf1') !== false) {
+      $spfRecord = $record['txt'];
+      break;
+    }
+  }
+  return $spfRecord;
+}
+function getSocialMediaProfiles($url)
+{
+  $socialProfiles = [];
+
+  // Create a new DOMDocument instance
+  $dom = new DOMDocument();
+
+  // Load the webpage HTML content
+  $html = file_get_contents($url);
+  $dom->loadHTML($html);
+
+  // Create a new DOMXPath instance
+  $xpath = new DOMXPath($dom);
+
+  // Define the XPath expressions for social media links
+  $expressions = [
+    'facebook' => "//a[contains(@href, 'facebook.com')]",
+    'twitter' => "//a[contains(@href, 'twitter.com')]",
+    'instagram' => "//a[contains(@href, 'instagram.com')]",
+    'linkedin' => "//a[contains(@href, 'linkedin.com')]",
+    'youtube' => "//a[contains(@href, 'youtube.com')]",
+    'pinterest' => "//a[contains(@href, 'pinterest.com')]",
+    'snapchat' => "//a[contains(@href, 'snapchat.com')]",
+    'tiktok' => "//a[contains(@href, 'tiktok.com')]",
+    'reddit' => "//a[contains(@href, 'reddit.com')]",
+    'tumblr' => "//a[contains(@href, 'tumblr.com')]",
+    'github' => "//a[contains(@href, 'github.com')]",
+    'wordpress' => "//a[contains(@href, 'wordpress.com')]",
+    'soundcloud' => "//a[contains(@href, 'soundcloud.com')]",
+    'pexels' => "//a[contains(@href, 'pexels.com')]",
+    'behance' => "//a[contains(@href, 'behance.net')]",
+    'dribbble' => "//a[contains(@href, 'dribbble.com')]",
+    'deviantart' => "//a[contains(@href, 'deviantart.com')]",
+    'flickr' => "//a[contains(@href, 'flickr.com')]",
+    'vimeo' => "//a[contains(@href, 'vimeo.com')]",
+    'twitch' => "//a[contains(@href, 'twitch.tv')]",
+    'spotify' => "//a[contains(@href, 'spotify.com')]",
+    'medium' => "//a[contains(@href, 'medium.com')]",
+    'weibo' => "//a[contains(@href, 'weibo.com')]",
+    'vk' => "//a[contains(@href, 'vk.com')]",
+    'telegram' => "//a[contains(@href, 'telegram.org')]",
+    'slack' => "//a[contains(@href, 'slack.com')]",
+    'digg' => "//a[contains(@href, 'digg.com')]",
+    'quora' => "//a[contains(@href, 'quora.com')]",
+    // Add more social media platforms here
+  ];
 
 
+  // Extract social media profiles using XPath queries
+  foreach ($expressions as $platform => $expression) {
+    $nodes = $xpath->query($expression);
+    if ($nodes->length > 0) {
+      $socialProfiles[$platform] = $nodes[0]->getAttribute('href');
+    }
+  }
 
+  return $socialProfiles;
+}
+$socialMediaProfiles = getSocialMediaProfiles($url);
 //gpt new code add here 
+
+
+
+
+
+
+
+
 
 
 function isCompressionEnabled($url)
@@ -473,12 +606,6 @@ function isCompressionEnabled($url)
 // Usage example:
 $isCompressionEnabled = isCompressionEnabled($url);
 
-
-
-
-
-
-
 require 'vendor/autoload.php';
 
 use DonatelloZa\RakePlus\RakePlus;
@@ -497,6 +624,9 @@ $mostCommonKeywords = RakePlus::create($text)->keywords();
 // Build the SEO report array
 $report = [
   'url' => $url,
+  'socialMediaPresence' => $socialMediaProfiles,
+  'domain' => $domain,
+  'spfRecord' => getSPFRecord($domain),
   'isCompression' => $isCompressionEnabled,
   'googleTrackingID' => $trackingID,
   'hasCustom404Page' => $hasCustom404Page,
